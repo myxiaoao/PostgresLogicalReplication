@@ -5,117 +5,201 @@ namespace Cooper\PostgresCDC;
 use Exception;
 
 class LogicalReplicationParser {
-    private PgoutputDecoder $decoder;
     private RelationMapping $relationMapping;
     
     public function __construct() {
-        $this->decoder = new PgoutputDecoder();
         $this->relationMapping = new RelationMapping();
     }
     
     /**
-     * 解析二进制数据
+     * 解析二进制数据（已废弃，保留以向后兼容）
      *
+     * @deprecated 请使用 parseWal2json 方法代替
      * @param string $binaryData 从PostgreSQL接收的二进制数据
      * @return array 解析后的数据
      * @throws Exception 如果解析失败
      */
     public function parse(string $binaryData): array {
-        try {
-            // 检查数据是否为空
-            if (empty($binaryData)) {
-                return ['type' => 'empty', 'message' => '接收到空数据'];
-            }
-            
-            $decodedData = $this->decoder->decode($binaryData);
-            
-            // 检查解码结果是否为错误
-            if (isset($decodedData['type']) && $decodedData['type'] === 'error') {
-                return $decodedData; // 直接返回错误信息
-            }
-            
-            // 处理关系和类型消息，更新映射
-            if ($decodedData['type'] === 'relation') {
-                $this->relationMapping->addRelation(
-                    $decodedData['relation_id'],
-                    $decodedData['namespace'],
-                    $decodedData['relation_name'],
-                    $decodedData['columns']
-                );
-            } elseif ($decodedData['type'] === 'type') {
-                $this->relationMapping->addType(
-                    $decodedData['type_id'],
-                    $decodedData['namespace'],
-                    $decodedData['type_name']
-                );
-            }
-            
-            // 增强数据操作消息
-            if (in_array($decodedData['type'], ['insert', 'update', 'delete'])) {
-                $decodedData = $this->enhanceDataOperationMessage($decodedData);
-            }
-            
-            return $decodedData;
-        } catch (Exception $e) {
-            return [
-                'type' => 'error',
-                'message' => "解析二进制数据失败: " . $e->getMessage(),
-                'raw_hex' => !empty($binaryData) ? bin2hex(substr($binaryData, 0, 50)) . '...' : '空数据'
-            ];
-        }
+        trigger_error('此方法已废弃，请使用 parseWal2json 方法代替', E_USER_DEPRECATED);
+        
+        return [
+            'type' => 'error',
+            'message' => '二进制解析已不再支持，请使用 wal2json 插件',
+            'raw_hex' => !empty($binaryData) ? bin2hex(substr($binaryData, 0, 50)) . '...' : '空数据'
+        ];
     }
     
     /**
-     * 增强数据操作消息（插入、更新、删除）
+     * 解析 wal2json 格式的数据
      *
-     * @param array $message 解码后的消息
-     * @return array 增强后的消息
+     * @param array $data wal2json 格式的数据
+     * @return array|null 解析后的数据，如果无法解析则返回 null
      */
-    private function enhanceDataOperationMessage(array $message): array {
-        $relationId = $message['relation_id'];
-        
-        // 添加表名信息
-        $message['table'] = $this->relationMapping->getFullTableName($relationId);
-        
-        // 处理元组数据
-        if ($message['type'] === 'insert') {
-            $message['data'] = $this->relationMapping->mapTupleDataToColumns($relationId, $message['tuple_data']);
-            unset($message['tuple_data']);
-        } elseif ($message['type'] === 'update') {
-            if ($message['has_old_tuple'] && $message['old_tuple_data'] !== null) {
-                $message['old_data'] = $this->relationMapping->mapTupleDataToColumns($relationId, $message['old_tuple_data']);
+    public function parseWal2json(array $data): ?array
+    {
+        try {
+            // 处理消息类型
+            if (isset($data['kind']) && $data['kind'] === 'message') {
+                return [
+                    'type' => 'message',
+                    'transactional' => $data['transactional'] ?? false,
+                    'prefix' => $data['prefix'] ?? '',
+                    'content' => $data['content'] ?? ''
+                ];
             }
-            $message['new_data'] = $this->relationMapping->mapTupleDataToColumns($relationId, $message['new_tuple_data']);
-            unset($message['old_tuple_data'], $message['new_tuple_data']);
-        } elseif ($message['type'] === 'delete') {
-            try {
-                // 处理DELETE操作的元组数据
-                $mappedData = $this->relationMapping->mapTupleDataToColumns($relationId, $message['tuple_data']);
-                
-                // 过滤掉未知类型的数据
-                $filteredData = [];
-                foreach ($mappedData as $key => $value) {
-                    // 如果值是数组且有type字段，可能是未知类型
-                    if (is_array($value) && isset($value['type']) && $value['type'] === 'unknown') {
-                        // 跳过未知类型
-                        continue;
+            
+            // 处理数据操作类型
+            if (!isset($data['kind'])) {
+                return null;
+            }
+            
+            $result = [
+                'type' => $data['kind'],
+                'schema' => $data['schema'] ?? 'public',
+                'table' => $data['table'] ?? null,
+            ];
+            
+            // 处理 begin 和 commit 消息（通过 action 字段）
+            if (isset($data['action'])) {
+                if ($data['action'] === 'B') {
+                    $result['type'] = 'begin';
+                    if (isset($data['xid'])) {
+                        $result['xid'] = $data['xid'];
                     }
-                    $filteredData[$key] = $value;
+                    if (isset($data['timestamp'])) {
+                        $result['timestamp'] = $data['timestamp'];
+                        $result['timestamp_formatted'] = $data['timestamp'];
+                    }
+                } elseif ($data['action'] === 'C') {
+                    $result['type'] = 'commit';
+                    if (isset($data['lsn'])) {
+                        $result['lsn'] = $data['lsn'];
+                    }
+                    if (isset($data['timestamp'])) {
+                        $result['timestamp'] = $data['timestamp'];
+                        $result['timestamp_formatted'] = $data['timestamp'];
+                    }
+                }
+            }
+            
+            // 添加关系ID（如果存在）
+            if (isset($data['relation_id'])) {
+                $result['relation_id'] = $data['relation_id'];
+            }
+            
+            // 处理插入操作
+            if ($data['kind'] === 'insert') {
+                if (isset($data['columnnames'], $data['columntypes'], $data['columnvalues'])) {
+                    $columnData = [];
+                    foreach ($data['columnnames'] as $index => $name) {
+                        $columnData[$name] = $data['columnvalues'][$index] ?? null;
+                    }
+                    $result['data'] = $columnData;
                 }
                 
-                $message['data'] = $filteredData;
-            } catch (\Exception $e) {
-                // 如果映射失败，保留原始数据
-                $message['data'] = $message['tuple_data'];
-                $message['mapping_error'] = $e->getMessage();
+                // 添加主键信息
+                if (isset($data['pk'])) {
+                    $result['primary_keys'] = array_column($data['pk'], 'name');
+                }
             }
-            unset($message['tuple_data']);
+            
+            // 处理更新操作
+            elseif ($data['kind'] === 'update') {
+                if (isset($data['columnnames'], $data['columntypes'], $data['columnvalues'])) {
+                    $newData = [];
+                    foreach ($data['columnnames'] as $index => $name) {
+                        $newData[$name] = $data['columnvalues'][$index] ?? null;
+                    }
+                    $result['new_data'] = $newData;
+                    $result['has_old_tuple'] = isset($data['oldkeys']);
+                }
+                
+                // 处理旧数据
+                if (isset($data['oldkeys'])) {
+                    $oldData = [];
+                    if (isset($data['oldkeys']['keynames'], $data['oldkeys']['keyvalues'])) {
+                        foreach ($data['oldkeys']['keynames'] as $index => $name) {
+                            $oldData[$name] = $data['oldkeys']['keyvalues'][$index] ?? null;
+                        }
+                    }
+                    $result['old_data'] = $oldData;
+                }
+                
+                // 添加主键信息
+                if (isset($data['pk'])) {
+                    $result['primary_keys'] = array_column($data['pk'], 'name');
+                } elseif (isset($data['oldkeys']['keynames'])) {
+                    $result['primary_keys'] = $data['oldkeys']['keynames'];
+                }
+            }
+            
+            // 处理删除操作
+            elseif ($data['kind'] === 'delete') {
+                if (isset($data['oldkeys'])) {
+                    $oldData = [];
+                    if (isset($data['oldkeys']['keynames'], $data['oldkeys']['keyvalues'])) {
+                        foreach ($data['oldkeys']['keynames'] as $index => $name) {
+                            $oldData[$name] = $data['oldkeys']['keyvalues'][$index] ?? null;
+                        }
+                    }
+                    $result['data'] = $oldData;
+                    
+                    // 添加主键信息
+                    if (isset($data['oldkeys']['keynames'])) {
+                        $result['primary_keys'] = $data['oldkeys']['keynames'];
+                    }
+                }
+            }
+            
+            // 处理截断操作
+            elseif ($data['kind'] === 'truncate') {
+                // 不需要额外处理
+            }
+            
+            // 处理关系定义
+            elseif ($data['kind'] === 'relation') {
+                $result['relation_id'] = $data['relation_id'] ?? null;
+                $result['namespace'] = $data['schema'] ?? $data['namespace'] ?? 'public';
+                $result['relation_name'] = $data['relation_name'] ?? $data['table'] ?? null;
+                $result['replica_identity'] = $data['replica_identity'] ?? null;
+                
+                // 处理列信息
+                if (isset($data['columns']) && is_array($data['columns'])) {
+                    $result['columns'] = $data['columns'];
+                } else {
+                    // 尝试从 columnnames 和 columntypes 构建列信息
+                    if (isset($data['columnnames'], $data['columntypes'])) {
+                        $columns = [];
+                        foreach ($data['columnnames'] as $index => $name) {
+                            $columns[] = [
+                                'name' => $name,
+                                'data_type_id' => $data['columntypes'][$index] ?? null,
+                                'is_key' => false // 默认不是主键
+                            ];
+                        }
+                        $result['columns'] = $columns;
+                    }
+                }
+            }
+            
+            // 添加 LSN 信息
+            if (isset($data['nextlsn'])) {
+                $result['lsn'] = $data['nextlsn'];
+            }
+            
+            // 添加时间戳
+            if (isset($data['timestamp'])) {
+                $result['timestamp'] = $data['timestamp'];
+                $result['timestamp_formatted'] = $data['timestamp'];
+            }
+            
+            return $result;
+        } catch (\Exception $e) {
+            return [
+                'type' => 'error',
+                'message' => "解析 wal2json 数据失败: " . $e->getMessage()
+            ];
         }
-        
-        // 添加主键信息
-        $message['primary_keys'] = $this->relationMapping->getPrimaryKeyColumns($relationId);
-        
-        return $message;
     }
     
     /**

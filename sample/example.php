@@ -63,22 +63,35 @@ if (!$replication->connect()) {
     die("Failed to connect to PostgreSQL\n");
 }
 
+// 如果需要更改复制槽的输出插件（例如从 pgoutput 更改为 wal2json），
+// 可以使用以下代码强制重新创建复制槽
+// 注意：这将删除现有的复制槽，可能会丢失未处理的变更
+/*
+if (!$replication->recreateReplicationSlot()) {
+    die("Failed to recreate replication slot\n");
+}
+*/
+
 // 设置复制
 if (!$replication->setupReplication()) {
     die("Failed to setup replication\n");
 }
 
+// 注意：此示例使用 wal2json 插件解析 PostgreSQL 逻辑复制输出
+// wal2json 将 WAL 变更转换为 JSON 格式，而不是二进制格式
+// 确保您的 PostgreSQL 安装了 wal2json 插件
+
 // 定义变更处理回调函数
 $handleChange = function($parsedData, $binaryData = null) use ($debug) {
-    echo "接收到PostgreSQL变更数据:\n";
+    echo "接收到 PostgreSQL 变更数据:\n";
     
     // 显示调试信息（如果启用）
     if ($debug['show_binary_data'] && $binaryData !== null) {
-        echo "原始二进制数据长度: " . strlen($binaryData) . " 字节\n";
+        echo "原始 JSON 数据长度: " . strlen($binaryData) . " 字节\n";
         
         if ($debug['show_hex_dump']) {
-            echo "十六进制转储:\n";
-            echo hexDump($binaryData) . "\n";
+            echo "JSON 数据:\n";
+            echo $binaryData . "\n";
         }
     }
     
@@ -86,39 +99,74 @@ $handleChange = function($parsedData, $binaryData = null) use ($debug) {
     switch($parsedData['type']) {
         case 'begin':
             echo "开始事务:\n";
-            echo "  LSN: {$parsedData['lsn']}\n";
-            echo "  时间戳: {$parsedData['timestamp_formatted']}\n";
-            echo "  事务ID: {$parsedData['xid']}\n";
+            if (isset($parsedData['lsn'])) {
+                echo "  LSN: {$parsedData['lsn']}\n";
+            }
+            if (isset($parsedData['timestamp_formatted'])) {
+                echo "  时间戳: {$parsedData['timestamp_formatted']}\n";
+            }
+            if (isset($parsedData['xid'])) {
+                echo "  事务ID: {$parsedData['xid']}\n";
+            }
             break;
             
         case 'commit':
             echo "提交事务:\n";
-            echo "  标志: {$parsedData['flags']}\n";
-            echo "  LSN: {$parsedData['lsn']}\n";
-            echo "  结束LSN: {$parsedData['end_lsn']}\n";
-            echo "  时间戳: {$parsedData['timestamp_formatted']}\n";
+            if (isset($parsedData['flags'])) {
+                echo "  标志: {$parsedData['flags']}\n";
+            }
+            if (isset($parsedData['lsn'])) {
+                echo "  LSN: {$parsedData['lsn']}\n";
+            }
+            if (isset($parsedData['end_lsn'])) {
+                echo "  结束LSN: {$parsedData['end_lsn']}\n";
+            }
+            if (isset($parsedData['timestamp_formatted'])) {
+                echo "  时间戳: {$parsedData['timestamp_formatted']}\n";
+            }
             break;
             
         case 'relation':
             echo "关系定义:\n";
-            echo "  关系ID: {$parsedData['relation_id']}\n";
-            echo "  命名空间: {$parsedData['namespace']}\n";
-            echo "  表名: {$parsedData['relation_name']}\n";
-            echo "  复制标识: {$parsedData['replica_identity']}\n";
-            echo "  列数量: " . count($parsedData['columns']) . "\n";
+            
+            // 检查必要的键是否存在
+            if (isset($parsedData['relation_id'])) {
+                echo "  关系ID: {$parsedData['relation_id']}\n";
+            }
+            
+            if (isset($parsedData['namespace'])) {
+                echo "  命名空间: {$parsedData['namespace']}\n";
+            }
+            
+            if (isset($parsedData['relation_name'])) {
+                echo "  表名: {$parsedData['relation_name']}\n";
+            }
+            
+            if (isset($parsedData['replica_identity'])) {
+                echo "  复制标识: {$parsedData['replica_identity']}\n";
+            }
             
             // 输出列信息
-            echo "  列信息:\n";
-            foreach ($parsedData['columns'] as $column) {
-                $keyFlag = $column['is_key'] ? "[主键]" : "";
-                echo "    - {$column['name']} (类型ID: {$column['data_type_id']}) $keyFlag\n";
+            if (isset($parsedData['columns']) && is_array($parsedData['columns'])) {
+                echo "  列数量: " . count($parsedData['columns']) . "\n";
+                echo "  列信息:\n";
+                foreach ($parsedData['columns'] as $column) {
+                    $keyFlag = isset($column['is_key']) && $column['is_key'] ? "[主键]" : "";
+                    $typeId = $column['data_type_id'] ?? '未知';
+                    $name = $column['name'] ?? '未知';
+                    echo "    - {$name} (类型ID: {$typeId}) $keyFlag\n";
+                }
             }
             break;
             
         case 'insert':
             echo "插入操作:\n";
             echo "  表: " . ($parsedData['table'] ?? "未知表") . "\n";
-            echo "  关系ID: {$parsedData['relation_id']}\n";
+            
+            // 检查 relation_id 是否存在
+            if (isset($parsedData['relation_id'])) {
+                echo "  关系ID: {$parsedData['relation_id']}\n";
+            }
             
             // 输出主键信息
             if (!empty($parsedData['primary_keys'])) {
@@ -148,7 +196,11 @@ $handleChange = function($parsedData, $binaryData = null) use ($debug) {
         case 'update':
             echo "更新操作:\n";
             echo "  表: " . ($parsedData['table'] ?? "未知表") . "\n";
-            echo "  关系ID: {$parsedData['relation_id']}\n";
+            
+            // 检查 relation_id 是否存在
+            if (isset($parsedData['relation_id'])) {
+                echo "  关系ID: {$parsedData['relation_id']}\n";
+            }
             
             // 输出主键信息
             if (!empty($parsedData['primary_keys'])) {
@@ -199,27 +251,21 @@ $handleChange = function($parsedData, $binaryData = null) use ($debug) {
         case 'delete':
             echo "删除操作:\n";
             echo "  表: " . ($parsedData['table'] ?? "未知表") . "\n";
-            echo "  关系ID: {$parsedData['relation_id']}\n";
+            
+            // 检查 relation_id 是否存在
+            if (isset($parsedData['relation_id'])) {
+                echo "  关系ID: {$parsedData['relation_id']}\n";
+            }
             
             // 输出主键信息
             if (!empty($parsedData['primary_keys'])) {
                 echo "  主键列: " . implode(', ', $parsedData['primary_keys']) . "\n";
             }
             
-            // 检查是否有映射错误
-            if (isset($parsedData['mapping_error'])) {
-                echo "  映射错误: {$parsedData['mapping_error']}\n";
-            }
-            
             // 输出数据
             echo "  数据:\n";
             if (empty($parsedData['data'])) {
                 echo "    没有数据或数据解析失败\n";
-                
-                // 显示原始二进制数据的十六进制表示（如果可用）
-                if ($binaryData !== null) {
-                    echo "  原始数据(十六进制): " . bin2hex(substr($binaryData, 0, 50)) . "...\n";
-                }
             } else {
                 foreach ($parsedData['data'] as $key => $value) {
                     if ($value === null) {
@@ -236,22 +282,19 @@ $handleChange = function($parsedData, $binaryData = null) use ($debug) {
             }
             break;
             
-        case 'truncate':
-            echo "截断表操作:\n";
-            echo "  级联: " . ($parsedData['cascade'] ? "是" : "否") . "\n";
-            echo "  重置自增ID: " . ($parsedData['restart_identity'] ? "是" : "否") . "\n";
-            echo "  表数量: " . count($parsedData['relations']) . "\n";
+        case 'message':
+            echo "逻辑复制消息:\n";
+            echo "  内容: {$parsedData['content']}\n";
+            echo "  前缀: {$parsedData['prefix']}\n";
+            echo "  事务性: " . ($parsedData['transactional'] ? 'true' : 'false') . "\n";
             break;
             
         default:
-            echo "未知或未处理的消息类型: {$parsedData['type']}\n";
-            echo "原始数据: " . json_encode($parsedData, JSON_UNESCAPED_UNICODE) . "\n";
+            echo "未知操作类型: {$parsedData['type']}\n";
+            print_r($parsedData);
     }
     
-    echo "----------------------------------------\n";
-    
-    // 这里可以添加自定义的业务逻辑
-    // 例如：根据变更数据更新缓存、发送通知、触发其他操作等
+    echo "\n";
 };
 
 // 开始监听变更
@@ -260,7 +303,7 @@ try {
     echo "按 Ctrl+C 退出\n";
     $replication->startReplication($handleChange);
 } catch (Exception $e) {
-    echo "错误: " . $e->getMessage() . "\n";
+    echo "Error: " . $e->getMessage() . "\n";
 } finally {
     $replication->close();
 }

@@ -84,14 +84,25 @@ class PostgresLogicalReplication {
                 throw new Exception("WAL level must be set to 'logical' in postgresql.conf");
             }
             
-            // 创建复制槽
-            $slotExists = $regularConn->query(
-                "SELECT 1 FROM pg_replication_slots WHERE slot_name = '$this->replicationSlotName'"
-            )->fetchColumn();
+            // 检查复制槽是否存在
+            $slotInfo = $regularConn->query(
+                "SELECT slot_name, plugin FROM pg_replication_slots WHERE slot_name = '$this->replicationSlotName'"
+            )->fetch(PDO::FETCH_ASSOC);
             
-            if (!$slotExists) {
+            // 如果复制槽存在但不是使用 wal2json 插件，则删除它
+            if ($slotInfo && $slotInfo['plugin'] !== 'wal2json') {
+                $this->logger->info("删除现有复制槽 {$this->replicationSlotName}，因为它使用的是 {$slotInfo['plugin']} 插件而不是 wal2json");
                 $regularConn->exec(
-                    "SELECT pg_create_logical_replication_slot('$this->replicationSlotName', 'pgoutput')"
+                    "SELECT pg_drop_replication_slot('$this->replicationSlotName')"
+                );
+                $slotInfo = null;
+            }
+            
+            // 创建复制槽（如果不存在或已被删除）
+            if (!$slotInfo) {
+                $this->logger->info("创建新的复制槽 {$this->replicationSlotName} 使用 wal2json 插件");
+                $regularConn->exec(
+                    "SELECT pg_create_logical_replication_slot('$this->replicationSlotName', 'wal2json')"
                 );
             }
             
@@ -206,16 +217,30 @@ class PostgresLogicalReplication {
                     throw new Exception("Replication slot '$this->replicationSlotName' does not exist");
                 }
                 
-                // 使用简单的查询方式获取变更数据
-                $query = "SELECT data FROM pg_logical_slot_get_binary_changes(
+                // 检查复制槽是否使用 wal2json 插件
+                $pluginName = pg_fetch_result(
+                    pg_query($pgsqlConn, "SELECT plugin FROM pg_replication_slots WHERE slot_name = '$this->replicationSlotName'"),
+                    0, 0
+                );
+                
+                if ($pluginName !== 'wal2json') {
+                    throw new Exception("Replication slot '$this->replicationSlotName' is using plugin '$pluginName' instead of 'wal2json'");
+                }
+                
+                // 使用 wal2json 插件获取 JSON 格式的变更数据
+                $query = "SELECT * FROM pg_logical_slot_get_changes(
                     '$this->replicationSlotName', 
                     NULL, 
                     NULL,
-                    'proto_version', '1',
-                    'publication_names', '$this->publicationName'
+                    'format-version', '1',
+                    'pretty-print', 'on',
+                    'include-timestamp', 'on',
+                    'include-types', 'on',
+                    'include-pk', 'on',
+                    'include-lsn', 'on'
                 )";
                 
-                $this->logger->info("Starting to fetch changes from replication slot");
+                $this->logger->info("Starting to fetch changes from replication slot using wal2json");
                 
                 // 主循环
                 while ($this->isRunning) {
@@ -239,45 +264,32 @@ class PostgresLogicalReplication {
                             $this->logger->debug("Received change data");
                             
                             try {
-                                // 处理二进制数据
-                                $binaryData = pg_unescape_bytea($row['data']);
-                                $this->logger->debug("Processing binary data");
+                                // 处理 JSON 数据
+                                $jsonData = $row['data'];
+                                $this->logger->debug("Processing JSON data");
                                 
-                                // 使用handleMessage方法处理消息
-                                $this->handleMessage($binaryData, $callback);
+                                // 使用 handleJsonMessage 方法处理 JSON 消息
+                                $this->handleJsonMessage($jsonData, $callback);
                             } catch (Exception $e) {
                                 $this->logger->error("Error processing change: " . $e->getMessage());
                             }
                         }
                     }
                     
-                    // 释放结果
-                    pg_free_result($result);
-                    
-                    // 在处理消息之间检查连接状态
-                    if (!$this->checkConnection()) {
-                        throw new Exception("Connection lost during replication");
-                    }
-                    
                     // 如果没有变更，等待一段时间再查询
                     if (!$hasChanges) {
-                        usleep(500000); // 500ms
+                        usleep(100000); // 休眠 100ms
                     }
                 }
                 
-                // 关闭连接
                 pg_close($pgsqlConn);
-                $this->logger->info("Replication stopped");
-                return true;
+                
             } catch (Exception $e) {
-                $this->logger->error("Replication error: {$e->getMessage()}");
+                $this->logger->error("Error in replication process: " . $e->getMessage());
                 
-                if (!$this->isRunning) {
-                    return false;
-                }
-                
+                // 尝试重连
                 if (!$this->reconnect()) {
-                    $this->logger->error("Fatal error: Unable to recover connection");
+                    $this->logger->error("Failed to reconnect after error, stopping replication");
                     return false;
                 }
             }
@@ -311,6 +323,59 @@ class PostgresLogicalReplication {
     }
     
     /**
+     * 强制重新创建复制槽
+     * 
+     * 当需要更改复制槽的输出插件时使用此方法
+     *
+     * @return bool 成功返回 true，失败返回 false
+     */
+    public function recreateReplicationSlot(): bool {
+        try {
+            // 确保使用的是非复制连接
+            $regularDsn = sprintf(
+                'pgsql:host=%s;port=%s;dbname=%s;application_name=%s',
+                $this->dbConfig['host'],
+                $this->dbConfig['port'],
+                $this->dbConfig['dbname'],
+                $this->dbConfig['application_name'] ?? 'php_logical_replication'
+            );
+            
+            $regularConn = new PDO(
+                $regularDsn,
+                $this->dbConfig['user'],
+                $this->dbConfig['password'],
+                [
+                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
+                ]
+            );
+            
+            // 检查复制槽是否存在
+            $slotExists = $regularConn->query(
+                "SELECT 1 FROM pg_replication_slots WHERE slot_name = '$this->replicationSlotName'"
+            )->fetchColumn();
+            
+            // 如果复制槽存在，删除它
+            if ($slotExists) {
+                $this->logger->info("删除现有复制槽 {$this->replicationSlotName}");
+                $regularConn->exec(
+                    "SELECT pg_drop_replication_slot('$this->replicationSlotName')"
+                );
+            }
+            
+            // 创建新的复制槽
+            $this->logger->info("创建新的复制槽 {$this->replicationSlotName} 使用 wal2json 插件");
+            $regularConn->exec(
+                "SELECT pg_create_logical_replication_slot('$this->replicationSlotName', 'wal2json')"
+            );
+            
+            return true;
+        } catch (Exception $e) {
+            $this->logger->error("重新创建复制槽失败: {$e->getMessage()}");
+            return false;
+        }
+    }
+    
+    /**
      * 获取解析器实例
      *
      * @return LogicalReplicationParser
@@ -341,40 +406,31 @@ class PostgresLogicalReplication {
     }
 
     /**
-     * 处理接收到的消息
+     * 处理 JSON 格式的消息
      *
-     * @param string $message 二进制消息
+     * @param string $jsonData JSON 数据
      * @param callable $callback 回调函数
+     * @return void
      */
-    private function handleMessage(string $message, callable $callback): void
+    private function handleJsonMessage(string $jsonData, callable $callback): void
     {
-        try {
-            // 检查消息是否为空
-            if (empty($message)) {
-                $this->logger->warning("接收到空消息");
-                return;
-            }
-            
-            // 解析消息
-            $parsedData = $this->parser->parse($message);
-            
-            // 如果解析结果是错误类型，记录错误并返回
-            if (isset($parsedData['type']) && $parsedData['type'] === 'error') {
-                $this->logger->error("消息解析错误: " . ($parsedData['message'] ?? '未知错误'));
-                return;
-            }
-            
-            // 调用回调函数
-            $callback($parsedData, $message);
-            
-            // 更新最后处理的LSN（如果存在）
-            if (isset($parsedData['lsn'])) {
-                $this->lastProcessedLsn = $parsedData['lsn'];
-            }
-        } catch (\Exception $e) {
-            $this->logger->error("处理消息时发生错误: " . $e->getMessage());
-            if (!empty($message)) {
-                $this->logger->debug("问题消息的十六进制表示: " . bin2hex(substr($message, 0, 50)) . "...");
+        // 解析 JSON 数据
+        $data = json_decode($jsonData, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            $this->logger->error("Failed to decode JSON data: " . json_last_error_msg());
+            return;
+        }
+        
+        // 处理 wal2json 格式的数据
+        if (isset($data['change']) && is_array($data['change'])) {
+            foreach ($data['change'] as $change) {
+                // 使用 LogicalReplicationParser 处理 wal2json 格式的变更
+                $parsedData = $this->parser->parseWal2json($change);
+                
+                // 调用回调函数
+                if ($parsedData !== null) {
+                    call_user_func($callback, $parsedData, $jsonData);
+                }
             }
         }
     }
