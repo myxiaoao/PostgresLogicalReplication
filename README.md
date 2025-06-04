@@ -6,18 +6,21 @@
 
 - 自动设置 PostgreSQL 逻辑复制槽和发布
 - 使用 wal2json 插件解析 PostgreSQL 的逻辑复制输出为 JSON 格式
-- 将表结构信息与数据变更关联
 - 支持事务、插入、更新、删除等操作的解析
-- 提供友好的 PHP 数组格式的变更数据
 - 自动重连和错误处理
 - 可定制的日志记录
+- 信号处理（优雅关闭）
 
 ## 系统要求
 
 - PHP 8.0+
 - PostgreSQL 10+（启用了逻辑复制功能和安装了 wal2json 插件）
-- PHP PostgreSQL 扩展（pgsql 和 pdo_pgsql）
-- Monolog 库（用于日志记录）
+- PHP 扩展：
+  - pdo
+  - pdo_pgsql
+  - pgsql
+  - pcntl（可选，用于信号处理）
+- Monolog 2.0+（用于日志记录）
 
 ## 安装
 
@@ -85,42 +88,50 @@ $replication = new PostgresLogicalReplication($dbConfig);
 
 // 连接数据库
 if (!$replication->connect()) {
-    die("Failed to connect to PostgreSQL\n");
+    die("无法连接到 PostgreSQL 数据库\n");
 }
 
 // 设置复制
 if (!$replication->setupReplication()) {
-    die("Failed to setup replication\n");
+    die("无法设置复制环境\n");
 }
 
 // 定义变更处理回调函数
-$handleChange = function($parsedData) {
-    // 根据消息类型处理内容
-    switch($parsedData['type']) {
-        case 'insert':
-            echo "插入操作: 表 {$parsedData['table']}\n";
-            print_r($parsedData['data']);
-            break;
+$handleChange = function($data, $rawJsonData = null) {
+    // 根据变更类型处理数据
+    if (isset($data['change'])) {
+        foreach ($data['change'] as $change) {
+            $kind = $change['kind'] ?? '';
+            $table = $change['table'] ?? '';
             
-        case 'update':
-            echo "更新操作: 表 {$parsedData['table']}\n";
-            echo "旧数据:\n";
-            print_r($parsedData['old_data'] ?? []);
-            echo "新数据:\n";
-            print_r($parsedData['new_data']);
-            break;
-            
-        case 'delete':
-            echo "删除操作: 表 {$parsedData['table']}\n";
-            print_r($parsedData['data']);
-            break;
-            
-        case 'message':
-            echo "逻辑复制消息:\n";
-            echo "内容: {$parsedData['content']}\n";
-            echo "前缀: {$parsedData['prefix']}\n";
-            echo "事务性: " . ($parsedData['transactional'] ? 'true' : 'false') . "\n";
-            break;
+            switch ($kind) {
+                case 'insert':
+                    echo "插入操作: 表 {$table}\n";
+                    if (isset($change['columnvalues'])) {
+                        print_r($change['columnvalues']);
+                    }
+                    break;
+                    
+                case 'update':
+                    echo "更新操作: 表 {$table}\n";
+                    if (isset($change['columnvalues'])) {
+                        echo "新值:\n";
+                        print_r($change['columnvalues']);
+                    }
+                    if (isset($change['oldkeys'])) {
+                        echo "旧键值:\n";
+                        print_r($change['oldkeys']);
+                    }
+                    break;
+                    
+                case 'delete':
+                    echo "删除操作: 表 {$table}\n";
+                    if (isset($change['oldkeys'])) {
+                        print_r($change['oldkeys']);
+                    }
+                    break;
+            }
+        }
     }
 };
 
@@ -128,107 +139,100 @@ $handleChange = function($parsedData) {
 try {
     $replication->startReplication($handleChange);
 } catch (Exception $e) {
-    echo "Error: " . $e->getMessage() . "\n";
+    echo "错误: " . $e->getMessage() . "\n";
 } finally {
     $replication->close();
 }
 ```
 
-## 解析后的数据格式
+## 配置选项
 
-根据消息类型，解析后的数据有不同的格式：
+### 数据库配置
 
-### 事务开始（begin）
+| 参数 | 描述 | 默认值 |
+|------|------|--------|
+| host | PostgreSQL 服务器主机 | - |
+| port | PostgreSQL 服务器端口 | - |
+| dbname | 数据库名称 | - |
+| user | 用户名 | - |
+| password | 密码 | - |
+| replication_slot_name | 复制槽名称 | php_logical_slot |
+| publication_name | 发布名称 | php_publication |
+| application_name | 应用名称 | php_logical_replication |
 
-```php
-[
-    'type' => 'begin',
-    'lsn' => 123456789,
-    'timestamp' => 1621234567,
-    'timestamp_formatted' => '2021-05-17 12:34:56',
-    'xid' => 12345
-]
+### 方法
+
+| 方法 | 描述 |
+|------|------|
+| connect() | 连接到 PostgreSQL 数据库 |
+| setupReplication() | 设置复制环境（创建复制槽和发布） |
+| startReplication(callable $callback) | 开始监听变更数据 |
+| close() | 关闭连接 |
+| setHeartbeatInterval(int $seconds) | 设置心跳间隔（秒） |
+| setMaxReconnectAttempts(int $attempts) | 设置最大重连次数 |
+| setReconnectDelay(int $seconds) | 设置重连延迟（秒） |
+| recreateReplicationSlot() | 重新创建复制槽 |
+
+## wal2json 输出格式
+
+wal2json 插件输出的 JSON 数据格式如下：
+
+### 插入操作
+
+```json
+{
+  "change": [
+    {
+      "kind": "insert",
+      "schema": "public",
+      "table": "users",
+      "columnnames": ["id", "name", "email"],
+      "columntypes": ["integer", "character varying(255)", "character varying(255)"],
+      "columnvalues": [1, "张三", "zhangsan@example.com"]
+    }
+  ]
+}
 ```
 
-### 事务提交（commit）
+### 更新操作
 
-```php
-[
-    'type' => 'commit',
-    'flags' => 0,
-    'lsn' => 123456789,
-    'end_lsn' => 123456790,
-    'timestamp' => 1621234567,
-    'timestamp_formatted' => '2021-05-17 12:34:56'
-]
+```json
+{
+  "change": [
+    {
+      "kind": "update",
+      "schema": "public",
+      "table": "users",
+      "columnnames": ["id", "name", "email"],
+      "columntypes": ["integer", "character varying(255)", "character varying(255)"],
+      "columnvalues": [1, "张三", "zhangsan_new@example.com"],
+      "oldkeys": {
+        "keynames": ["id"],
+        "keytypes": ["integer"],
+        "keyvalues": [1]
+      }
+    }
+  ]
+}
 ```
 
-### 插入操作（insert）
+### 删除操作
 
-```php
-[
-    'type' => 'insert',
-    'relation_id' => 12345,
-    'table' => 'public.users',
-    'data' => [
-        'id' => '1',
-        'name' => '张三',
-        'email' => 'zhangsan@example.com',
-        'created_at' => '2021-05-17 12:34:56'
-    ],
-    'primary_keys' => ['id']
-]
-```
-
-### 更新操作（update）
-
-```php
-[
-    'type' => 'update',
-    'relation_id' => 12345,
-    'table' => 'public.users',
-    'has_old_tuple' => true,
-    'old_data' => [
-        'id' => '1',
-        'name' => '张三',
-        'email' => 'zhangsan@example.com',
-        'updated_at' => '2021-05-17 12:34:56'
-    ],
-    'new_data' => [
-        'id' => '1',
-        'name' => '张三',
-        'email' => 'zhangsan_new@example.com',
-        'updated_at' => '2021-05-17 12:45:00'
-    ],
-    'primary_keys' => ['id']
-]
-```
-
-### 删除操作（delete）
-
-```php
-[
-    'type' => 'delete',
-    'relation_id' => 12345,
-    'table' => 'public.users',
-    'data' => [
-        'id' => '1',
-        'name' => '张三',
-        'email' => 'zhangsan@example.com'
-    ],
-    'primary_keys' => ['id']
-]
-```
-
-### 消息操作（message）
-
-```php
-[
-    'type' => 'message',
-    'transactional' => true,
-    'prefix' => 'my_app',
-    'content' => '这是一条通过 pg_logical_emit_message 发送的消息'
-]
+```json
+{
+  "change": [
+    {
+      "kind": "delete",
+      "schema": "public",
+      "table": "users",
+      "oldkeys": {
+        "keynames": ["id"],
+        "keytypes": ["integer"],
+        "keyvalues": [1]
+      }
+    }
+  ]
+}
 ```
 
 ## 关于 wal2json 插件
@@ -239,7 +243,6 @@ wal2json 支持以下功能：
 
 - 将 INSERT、UPDATE、DELETE 操作转换为 JSON 格式
 - 支持事务边界（开始和提交）
-- 支持逻辑复制消息
 - 提供列名、类型和值
 - 提供主键信息
 - 支持多种配置选项，如时间戳、模式名称等
