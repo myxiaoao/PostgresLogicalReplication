@@ -16,7 +16,7 @@
 
 - PHP 8.0+
 - PostgreSQL 10+（启用了逻辑复制功能和安装了 wal2json 插件）
-- PHP PostgreSQL 扩展（pgsql）
+- PHP PostgreSQL 扩展（pgsql 和 pdo_pgsql）
 - Monolog 库（用于日志记录）
 
 ## 安装
@@ -133,15 +133,6 @@ try {
     $replication->close();
 }
 ```
-
-## 高级用法
-
-查看 `sample/business_example.php` 文件，了解如何使用解析后的数据实现业务逻辑，例如：
-
-- 更新缓存
-- 发送消息到消息队列
-- 触发特定业务事件
-- 处理不同表的变更
 
 ## 解析后的数据格式
 

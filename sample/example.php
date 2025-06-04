@@ -7,12 +7,6 @@ use Monolog\Logger;
 use Monolog\Handler\StreamHandler;
 use Monolog\Formatter\LineFormatter;
 
-// 调试选项
-$debug = [
-    'show_binary_data' => false,  // 设置为true以显示原始二进制数据
-    'show_hex_dump' => false      // 设置为true以显示十六进制转储
-];
-
 // 数据库配置
 $dbConfig = [
     'host' => 'localhost',
@@ -50,9 +44,6 @@ $logger->pushHandler($file);
 // 创建复制实例，注入日志实例
 $replication = new PostgresLogicalReplication($dbConfig, $logger);
 
-// 或使用默认日志配置
-// $replication = new PostgresLogicalReplication($dbConfig);
-
 // 配置心跳和重连参数
 $replication->setHeartbeatInterval(10);  // 10 秒发送一次心跳
 $replication->setMaxReconnectAttempts(3); // 最多重试 3 次
@@ -63,37 +54,14 @@ if (!$replication->connect()) {
     die("Failed to connect to PostgreSQL\n");
 }
 
-// 如果需要更改复制槽的输出插件（例如从 pgoutput 更改为 wal2json），
-// 可以使用以下代码强制重新创建复制槽
-// 注意：这将删除现有的复制槽，可能会丢失未处理的变更
-/*
-if (!$replication->recreateReplicationSlot()) {
-    die("Failed to recreate replication slot\n");
-}
-*/
-
 // 设置复制
 if (!$replication->setupReplication()) {
     die("Failed to setup replication\n");
 }
 
-// 注意：此示例使用 wal2json 插件解析 PostgreSQL 逻辑复制输出
-// wal2json 将 WAL 变更转换为 JSON 格式，而不是二进制格式
-// 确保您的 PostgreSQL 安装了 wal2json 插件
-
 // 定义变更处理回调函数
-$handleChange = function($parsedData, $binaryData = null) use ($debug) {
+$handleChange = function($parsedData) {
     echo "接收到 PostgreSQL 变更数据:\n";
-    
-    // 显示调试信息（如果启用）
-    if ($debug['show_binary_data'] && $binaryData !== null) {
-        echo "原始 JSON 数据长度: " . strlen($binaryData) . " 字节\n";
-        
-        if ($debug['show_hex_dump']) {
-            echo "JSON 数据:\n";
-            echo $binaryData . "\n";
-        }
-    }
     
     // 根据消息类型处理内容
     switch($parsedData['type']) {
@@ -282,15 +250,20 @@ $handleChange = function($parsedData, $binaryData = null) use ($debug) {
             }
             break;
             
+        case 'truncate':
+            echo "截断操作:\n";
+            echo "  表: " . ($parsedData['table'] ?? "未知表") . "\n";
+            break;
+            
         case 'message':
             echo "逻辑复制消息:\n";
-            echo "  内容: {$parsedData['content']}\n";
-            echo "  前缀: {$parsedData['prefix']}\n";
-            echo "  事务性: " . ($parsedData['transactional'] ? 'true' : 'false') . "\n";
+            echo "  内容: " . ($parsedData['content'] ?? "无内容") . "\n";
+            echo "  前缀: " . ($parsedData['prefix'] ?? "无前缀") . "\n";
+            echo "  事务性: " . (($parsedData['transactional'] ?? false) ? "是" : "否") . "\n";
             break;
             
         default:
-            echo "未知操作类型: {$parsedData['type']}\n";
+            echo "未知操作类型: " . $parsedData['type'] . "\n";
             print_r($parsedData);
     }
     
@@ -299,66 +272,9 @@ $handleChange = function($parsedData, $binaryData = null) use ($debug) {
 
 // 开始监听变更
 try {
-    echo "开始监控数据库变更...\n";
-    echo "按 Ctrl+C 退出\n";
     $replication->startReplication($handleChange);
 } catch (Exception $e) {
     echo "Error: " . $e->getMessage() . "\n";
 } finally {
     $replication->close();
-}
-
-/**
- * 生成二进制数据的十六进制转储
- *
- * @param string $data 二进制数据
- * @param int $bytesPerLine 每行显示的字节数
- * @return string 格式化的十六进制转储
- */
-function hexDump($data, $bytesPerLine = 16) {
-    $hexDump = '';
-    $hexChars = '';
-    $asciiChars = '';
-    $length = strlen($data);
-    
-    for ($i = 0; $i < $length; $i++) {
-        // 新行开始
-        if ($i % $bytesPerLine === 0) {
-            if ($i > 0) {
-                $hexDump .= sprintf("  %s\n", $asciiChars);
-                $asciiChars = '';
-            }
-            $hexDump .= sprintf("%08X: ", $i);
-        }
-        
-        // 获取当前字节的十六进制和ASCII表示
-        $byte = ord($data[$i]);
-        $hexChars = sprintf("%02X ", $byte);
-        $asciiChar = ($byte >= 32 && $byte <= 126) ? $data[$i] : '.';
-        
-        $hexDump .= $hexChars;
-        $asciiChars .= $asciiChar;
-        
-        // 每8个字节添加一个额外的空格
-        if (($i + 1) % 8 === 0 && ($i + 1) % $bytesPerLine !== 0) {
-            $hexDump .= ' ';
-        }
-    }
-    
-    // 补齐最后一行
-    $remaining = $length % $bytesPerLine;
-    if ($remaining > 0) {
-        $padding = $bytesPerLine - $remaining;
-        $hexDump .= str_repeat('   ', $padding);
-        
-        // 添加额外的空格（如果需要）
-        if ($remaining <= 8) {
-            $hexDump .= ' ';
-        }
-    }
-    
-    // 添加最后一行的ASCII部分
-    $hexDump .= sprintf("  %s", $asciiChars);
-    
-    return $hexDump;
 }

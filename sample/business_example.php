@@ -272,7 +272,7 @@ function handleOrderChanges(array $data, array &$cache, array &$messageQueue, Lo
                 if ($oldStatus !== null && $newStatus !== null && $oldStatus != $newStatus) {
                     $logger->info("订单 {$orderId} 状态从 {$oldStatus} 变更为 {$newStatus}");
                     
-                    // 订单状态变化通知
+                    // 状态变化通知
                     $messageQueue[] = [
                         'topic' => 'order_status_changed',
                         'payload' => [
@@ -325,16 +325,14 @@ function processMessageQueue(array &$messageQueue, Logger $logger): void {
         return;
     }
     
-    $logger->info("处理消息队列，共 " . count($messageQueue) . " 条消息");
+    $logger->info("处理消息队列中的 " . count($messageQueue) . " 条消息");
     
-    foreach ($messageQueue as $message) {
-        $topic = $message['topic'];
-        $payload = $message['payload'];
-        
-        // 在实际应用中，这里会将消息发送到实际的消息队列系统（如RabbitMQ、Kafka等）
-        $logger->info("发送消息到主题 '{$topic}': " . json_encode($payload, JSON_UNESCAPED_UNICODE));
+    // 在实际应用中，这里会将消息发送到消息队列系统（如Kafka、RabbitMQ等）
+    foreach ($messageQueue as $index => $message) {
+        $logger->info("发送消息到主题 '{$message['topic']}'");
+        // 实际发送消息的代码
     }
     
-    // 清空消息队列
+    // 清空本地消息队列
     $messageQueue = [];
 } 

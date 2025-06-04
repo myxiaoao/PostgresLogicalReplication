@@ -12,24 +12,6 @@ class LogicalReplicationParser {
     }
     
     /**
-     * 解析二进制数据（已废弃，保留以向后兼容）
-     *
-     * @deprecated 请使用 parseWal2json 方法代替
-     * @param string $binaryData 从PostgreSQL接收的二进制数据
-     * @return array 解析后的数据
-     * @throws Exception 如果解析失败
-     */
-    public function parse(string $binaryData): array {
-        trigger_error('此方法已废弃，请使用 parseWal2json 方法代替', E_USER_DEPRECATED);
-        
-        return [
-            'type' => 'error',
-            'message' => '二进制解析已不再支持，请使用 wal2json 插件',
-            'raw_hex' => !empty($binaryData) ? bin2hex(substr($binaryData, 0, 50)) . '...' : '空数据'
-        ];
-    }
-    
-    /**
      * 解析 wal2json 格式的数据
      *
      * @param array $data wal2json 格式的数据

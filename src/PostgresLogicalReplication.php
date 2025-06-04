@@ -324,8 +324,6 @@ class PostgresLogicalReplication {
     
     /**
      * 强制重新创建复制槽
-     * 
-     * 当需要更改复制槽的输出插件时使用此方法
      *
      * @return bool 成功返回 true，失败返回 false
      */
