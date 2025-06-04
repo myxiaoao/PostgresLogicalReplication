@@ -2,10 +2,10 @@
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
-use Cooper\PostgresCDC\PostgresLogicalReplication;
-use Monolog\Logger;
-use Monolog\Handler\StreamHandler;
+use Cooper\PostgreCDC\PostgreLogicalReplication;
 use Monolog\Formatter\LineFormatter;
+use Monolog\Handler\StreamHandler;
+use Monolog\Logger;
 
 // 数据库配置
 $dbConfig = [
@@ -20,7 +20,7 @@ $dbConfig = [
 ];
 
 // 创建自定义日志实例
-$logger = new Logger('postgres-cdc');
+$logger = new Logger('POSTGRE-CDC');
 $formatter = new LineFormatter(
     "[%datetime%] %channel%.%level_name%: %message%\n",
     "Y-m-d H:i:s"
@@ -36,13 +36,13 @@ $logDir = __DIR__ . '/../logs';
 if (!is_dir($logDir) && !mkdir($logDir, 0755, true) && !is_dir($logDir)) {
     throw new \RuntimeException(sprintf('目录 "%s" 无法创建', $logDir));
 }
-$logFile = $logDir . '/postgres_cdc.log';
+$logFile = $logDir . '/postgre_cdc.log';
 $file = new StreamHandler($logFile, Logger::DEBUG);
 $file->setFormatter($formatter);
 $logger->pushHandler($file);
 
 // 创建复制实例，注入日志实例
-$replication = new PostgresLogicalReplication($dbConfig, $logger);
+$replication = new PostgreLogicalReplication($dbConfig, $logger);
 
 // 配置心跳和重连参数
 $replication->setHeartbeatInterval(10);  // 10 秒发送一次心跳
@@ -60,15 +60,20 @@ if (!$replication->setupReplication()) {
 }
 
 // 定义变更处理回调函数
-$handleChange = function($data, $rawJsonData = null) {
+$handleChange = function ($data, $rawJsonData = null) {
     echo "接收到 PostgreSQL 变更数据:\n";
-    
+
+    print_r($data);
+    echo "\n";
+    print_r($rawJsonData);
+    echo "\n";
+
     // 根据变更类型处理数据
     if (isset($data['change'])) {
         foreach ($data['change'] as $change) {
             $kind = $change['kind'] ?? '';
             $table = $change['table'] ?? '';
-            
+
             switch ($kind) {
                 case 'insert':
                     echo "插入操作: 表 {$table}\n";
@@ -76,7 +81,7 @@ $handleChange = function($data, $rawJsonData = null) {
                         print_r($change['columnvalues']);
                     }
                     break;
-                    
+
                 case 'update':
                     echo "更新操作: 表 {$table}\n";
                     if (isset($change['columnvalues'])) {
@@ -88,26 +93,26 @@ $handleChange = function($data, $rawJsonData = null) {
                         print_r($change['oldkeys']);
                     }
                     break;
-                    
+
                 case 'delete':
                     echo "删除操作: 表 {$table}\n";
                     if (isset($change['oldkeys'])) {
                         print_r($change['oldkeys']);
                     }
                     break;
-                    
+
                 default:
                     echo "其他操作: {$kind}\n";
                     print_r($change);
             }
-            
+
             echo "\n";
         }
     } else {
         // 处理其他类型的消息
         print_r($data);
     }
-    
+
     echo "\n";
 };
 
@@ -115,7 +120,7 @@ $handleChange = function($data, $rawJsonData = null) {
 try {
     echo "开始监听 PostgreSQL 数据变更...\n";
     echo "按 Ctrl+C 停止\n\n";
-    
+
     $replication->startReplication($handleChange);
 } catch (Exception $e) {
     echo "错误: " . $e->getMessage() . "\n";

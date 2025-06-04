@@ -1,6 +1,6 @@
 <?php
 
-namespace Cooper\PostgresCDC;
+namespace Cooper\PostgreCDC;
 
 use Exception;
 use JsonException;
@@ -12,10 +12,10 @@ use PDOException;
 
 /**
  * PostgreSQL 逻辑复制客户端
- * 
+ *
  * 使用 wal2json 插件解析 PostgreSQL 的逻辑复制输出，将变更数据转换为 PHP 数组
  */
-class PostgresLogicalReplication
+class PostgreLogicalReplication
 {
     private ?PDO $conn = null;
     private string $replicationSlotName;
@@ -139,7 +139,7 @@ class PostgresLogicalReplication
      */
     public function startReplication(callable $callback): bool
     {
-        // 检查PHP是否安装了必要的PostgreSQL扩展
+        // 检查 PHP 是否安装了必要的 PostgreSQL 扩展
         if (!extension_loaded('pgsql')) {
             $this->logger->error("未加载 PostgreSQL 扩展");
             return false;
@@ -478,7 +478,7 @@ class PostgresLogicalReplication
      */
     private function createDefaultLogger(): Logger
     {
-        $logger = new Logger('postgres-cdc');
+        $logger = new Logger('POSTGRE-CDC');
         $formatter = new LineFormatter(
             "[%datetime%] %channel%.%level_name%: %message% %context%\n",
             "Y-m-d H:i:s"
@@ -490,7 +490,7 @@ class PostgresLogicalReplication
         $logger->pushHandler($stdout);
 
         // 文件日志
-        $logFile = sys_get_temp_dir() . '/postgres_cdc_' . date('Y-m-d') . '.log';
+        $logFile = sys_get_temp_dir() . '/postgre_cdc_' . date('Y-m-d') . '.log';
         $file = new StreamHandler($logFile, Logger::DEBUG);
         $file->setFormatter($formatter);
         $logger->pushHandler($file);

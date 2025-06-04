@@ -6,7 +6,7 @@
 
 - 自动设置 PostgreSQL 逻辑复制槽和发布
 - 使用 wal2json 插件解析 PostgreSQL 的逻辑复制输出为 JSON 格式
-- 支持事务、插入、更新、删除等操作的解析
+- 支持插入、更新、删除等操作的解析
 - 自动重连和错误处理
 - 可定制的日志记录
 - 信号处理（优雅关闭）
@@ -27,41 +27,22 @@
 通过 Composer 安装：
 
 ```bash
-composer require cooper/postgres-cdc
+composer require cooper/postgre-cdc
 ```
 
 ## 配置 PostgreSQL
 
 确保 PostgreSQL 已启用逻辑复制功能，并安装了 wal2json 插件。在 `postgresql.conf` 中设置：
 
+
 ```
-wal_level = logical
+wal_level = logical         # 启用逻辑复制
+max_replication_slots = 5   # 复制槽数量
+max_wal_senders = 5         # 并发复制连接数
+shared_preload_libraries = 'wal2json'  # 加载插件
 ```
 
 然后重启 PostgreSQL 服务器。
-
-### 安装 wal2json 插件
-
-对于大多数 PostgreSQL 发行版，wal2json 插件已经包含在 contrib 模块中。可以通过以下方式安装：
-
-**Debian/Ubuntu:**
-```bash
-sudo apt-get install postgresql-contrib
-```
-
-**CentOS/RHEL:**
-```bash
-sudo yum install postgresql-contrib
-```
-
-如果您的 PostgreSQL 发行版没有包含 wal2json，可以从源代码编译安装：
-
-```bash
-git clone https://github.com/eulerto/wal2json.git
-cd wal2json
-make
-make install
-```
 
 ## 基本用法
 
@@ -70,7 +51,7 @@ make install
 
 require_once 'vendor/autoload.php';
 
-use Cooper\PostgresCDC\PostgresLogicalReplication;
+use Cooper\PostgreCDC\PostgreLogicalReplication;
 
 // 数据库配置
 $dbConfig = [
@@ -84,7 +65,7 @@ $dbConfig = [
 ];
 
 // 创建复制实例
-$replication = new PostgresLogicalReplication($dbConfig);
+$replication = new PostgreLogicalReplication($dbConfig);
 
 // 连接数据库
 if (!$replication->connect()) {
@@ -251,4 +232,4 @@ wal2json 支持以下功能：
 
 ## 许可证
 
-MIT
+The MIT License (MIT). Please see [License File](LICENSE.md) for more information.

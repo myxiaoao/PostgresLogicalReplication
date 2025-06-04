@@ -1,5 +1,5 @@
 {
-    "name": "cooper/postgres-cdc",
+    "name": "cooper/postgre-cdc",
     "description": "PostgreSQL Change Data Capture using logical replication",
     "type": "library",
     "license": "MIT",
@@ -19,7 +19,7 @@
     },
     "autoload": {
         "psr-4": {
-            "Cooper\\PostgresCDC\\": "src/"
+            "Cooper\\PostgreCDC\\": "src/"
         }
     }
 }
