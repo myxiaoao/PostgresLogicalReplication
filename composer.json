@@ -1,0 +1,24 @@
+{
+    "name": "cooper/postgres-cdc",
+    "description": "PostgreSQL Change Data Capture using logical replication",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "cooper",
+            "email": "myxiaoao@gmail.com"
+        }
+    ],
+    "minimum-stability": "dev",
+    "require": {
+        "php": ">=8.0",
+        "ext-pdo": "*",
+        "ext-pdo_pgsql": "*",
+        "monolog/monolog": "^2.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Cooper\\PostgresCDC\\": "src/"
+        }
+    }
+}
