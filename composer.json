@@ -12,6 +12,7 @@
     "minimum-stability": "dev",
     "require": {
         "php": ">=8.0",
+        "ext-pgsql": "*",
         "ext-pdo": "*",
         "ext-pdo_pgsql": "*",
         "ext-pcntl": "*",

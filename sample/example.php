@@ -61,13 +61,6 @@ if (!$replication->setupReplication()) {
 
 // 定义变更处理回调函数
 $handleChange = function ($data, $rawJsonData = null) {
-    echo "接收到 PostgreSQL 变更数据:\n";
-
-    print_r($data);
-    echo "\n";
-    print_r($rawJsonData);
-    echo "\n";
-
     // 根据变更类型处理数据
     if (isset($data['change'])) {
         foreach ($data['change'] as $change) {

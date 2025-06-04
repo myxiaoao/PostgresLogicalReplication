@@ -88,7 +88,7 @@ class PostgreLogicalReplication
             // 检查并设置 wal_level
             $walLevel = $regularConn->query("SHOW wal_level")->fetchColumn();
             if ($walLevel !== 'logical') {
-                throw new Exception("WAL level 必须在 postgresql.conf 中设置为 'logical'");
+                throw new \RuntimeException("WAL level 必须在 postgresql.conf 中设置为 'logical'");
             }
 
             // 检查复制槽是否存在
@@ -153,16 +153,14 @@ class PostgreLogicalReplication
 
         while ($this->isRunning) {
             try {
-                if (!$this->checkConnection()) {
-                    if (!$this->reconnect()) {
-                        throw new Exception("无法维持连接");
-                    }
+                if (!$this->checkConnection() && !$this->reconnect()) {
+                    throw new \RuntimeException("无法维持连接");
                 }
 
                 // 建立专用的复制连接
                 $pgsqlConn = $this->createReplicationConnection();
                 if (!$pgsqlConn) {
-                    throw new Exception("无法建立 PostgreSQL 连接");
+                    throw new \RuntimeException("无法建立 PostgreSQL 连接");
                 }
 
                 // 验证复制槽
@@ -183,7 +181,7 @@ class PostgreLogicalReplication
                     // 获取变更数据
                     $result = pg_query($pgsqlConn, $query);
                     if (!$result) {
-                        throw new Exception("获取变更失败: " . pg_last_error($pgsqlConn));
+                        throw new \RuntimeException("获取变更失败: " . pg_last_error($pgsqlConn));
                     }
 
                     $hasChanges = false;
@@ -192,7 +190,7 @@ class PostgreLogicalReplication
                     while ($row = pg_fetch_assoc($result)) {
                         $hasChanges = true;
                         if (isset($row['data'])) {
-                            $this->logger->debug("接收到变更数据");
+                            $this->logger->debug("接收到 PostgreSQL 变更数据.");
                             try {
                                 $this->handleJsonMessage($row['data'], $callback);
                             } catch (Exception $e) {
@@ -267,42 +265,6 @@ class PostgreLogicalReplication
     public function setReconnectDelay(int $seconds): void
     {
         $this->reconnectDelay = $seconds;
-    }
-
-    /**
-     * 强制重新创建复制槽
-     *
-     * @return bool 成功返回 true，失败返回 false
-     */
-    public function recreateReplicationSlot(): bool
-    {
-        try {
-            $regularConn = $this->createRegularConnection();
-
-            // 检查复制槽是否存在
-            $slotExists = $regularConn->query(
-                "SELECT 1 FROM pg_replication_slots WHERE slot_name = '$this->replicationSlotName'"
-            )->fetchColumn();
-
-            // 如果复制槽存在，删除它
-            if ($slotExists) {
-                $this->logger->info("删除现有复制槽 {$this->replicationSlotName}");
-                $regularConn->exec(
-                    "SELECT pg_drop_replication_slot('$this->replicationSlotName')"
-                );
-            }
-
-            // 创建新的复制槽
-            $this->logger->info("创建新的复制槽 {$this->replicationSlotName} 使用 wal2json 插件");
-            $regularConn->exec(
-                "SELECT pg_create_logical_replication_slot('$this->replicationSlotName', 'wal2json')"
-            );
-
-            return true;
-        } catch (Exception $e) {
-            $this->logger->error("重新创建复制槽失败: {$e->getMessage()}");
-            return false;
-        }
     }
 
     /**
